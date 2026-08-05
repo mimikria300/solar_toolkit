@@ -1,4 +1,6 @@
 import os
+import sys
+from pathlib import Path
 
 to_upload = [
     #('ACE_AC_H0_SWE_v01_u2026-05-20T13-35-00.zip', 'ACE_AC_H0_SWE_v01_matchfile.json'),
@@ -18,7 +20,9 @@ umatchtest_ACE_AC_H0_MFI_v00 ACE_AC_H0_MFI_v00
 '''
 
 # Path to manage.py
-manage_py = "/home/mxxun/dev/solarbase/solar_project_2/solar_project/olarterra/manage.py"
+BASE_DIR = Path(__file__).resolve().parent
+manage_py = BASE_DIR.parent / "solar_project" / "solarterra" / "manage.py"
+python_cmd = f'"{sys.executable}"'
 
 def get_dataset_tag(zip_filename):
     return zip_filename.split('_u')[0]
@@ -35,7 +39,7 @@ for z, m in to_upload:
     print(f"{'='*60}")
     
     # 1. evaluate
-    cmd = f"python3 {manage_py} evaluate {z} {m}"
+    cmd = f"{python_cmd} \"{manage_py}\" evaluate {z} {m}"
     print(f"Running: {cmd}")
     ret = os.system(cmd)
     if ret != 0:
@@ -43,7 +47,7 @@ for z, m in to_upload:
         continue
     
     # 2. makemigrations
-    cmd = f"python3 {manage_py} makemigrations data_cdf --skip-checks"
+    cmd = f"{python_cmd} \"{manage_py}\" makemigrations data_cdf --skip-checks"
     print(f"Running: {cmd}")
     ret = os.system(cmd)
     if ret != 0:
@@ -51,7 +55,7 @@ for z, m in to_upload:
         continue
     
     # 3. migrate
-    cmd = f"python3 {manage_py} migrate data_cdf --skip-checks"
+    cmd = f"{python_cmd} \"{manage_py}\" migrate data_cdf --skip-checks"
     print(f"Running: {cmd}")
     ret = os.system(cmd)
     if ret != 0:
@@ -59,7 +63,7 @@ for z, m in to_upload:
         continue
     
     # 4. save_data
-    cmd = f"python3 {manage_py} save_data {upload_tag} {dataset_tag}"
+    cmd = f"{python_cmd} \"{manage_py}\" save_data {upload_tag} {dataset_tag}"
     print(f"Running: {cmd}")
     ret = os.system(cmd)
     if ret != 0:
