@@ -3,20 +3,31 @@ import sys
 from pathlib import Path
 
 to_upload = [
-    #('ACE_AC_H0_SWE_v01_u2026-05-20T13-35-00.zip', 'ACE_AC_H0_SWE_v01_matchfile.json'),
-    #('WIND_WI_K0_SWE_v01_u2026-05-20T13-36-00.zip','WIND_WI_K0_SWE_v01_matchfile.json'),
-    #('WIND_WI_OR_PRE_v01_u2026-05-20T13-37-00.zip','WIND_WI_OR_PRE_v01_matchfile.json'),
-    ('ACE_AC_H0_MFI_v00_umatchtest.zip','ACE_AC_H1_MFI_v00_matchfile.json'),
-    #('ACE_AC_OR_SSC_v00_umatchtest.zip','ACE_AC_OR_SSC_v00_matchfile.json'),
-    #('WIND_WI_K0_SWE_v00_umatchtest.zip','WIND_WI_K0_SWE_v00_matchfile.json'),
-    #('WIND_WI_OR_PRE_v00_umatchtest.zip','WIND_WI_OR_PRE_v00_matchfile.json'),
+    #('ACE_AC_H0_MFI_v01_u2026-05-20T13-35-00.zip',            'ACE_AC_H0_MFI_v01_matchfile.json'),
+    #('ACE_AC_H0_SWE_v01_u2026-05-20T13-35-00.zip',            'ACE_AC_H0_SWE_v01_matchfile.json'),
+    ('ACE_AC_OR_SSC_v01_u2026-05-20T13-35-00.zip',            'ACE_AC_OR_SSC_v01_matchfile.json'),
+    ('DSCOVR_DSCOVR_ORBIT_PRE_v01_u2026-05-20T13-36-00.zip',  'DSCOVR_DSCOVR_ORBIT_PRE_v01_matchfile.json'),
+    ('INTERBALL_IT_H0_DOK_v01_u2026-05-20T13-36-00.zip',      'INTERBALL_IT_H0_DOK_v01_matchfile.json'),
+    ('INTERBALL_IT_K0_ELE_v01_u2026-05-20T13-36-00.zip',      'INTERBALL_IT_K0_ELE_v01_matchfile.json'),
+    ('INTERBALL_IT_K0_VDP_v01_u2026-05-20T13-36-00.zip',      'INTERBALL_IT_K0_VDP_v01_matchfile.json'),
+    ('INTERBALL_IT_OR_DEF_v01_u2026-05-20T13-36-00.zip',      'INTERBALL_IT_OR_DEF_v01_matchfile.json'),
+    ('WIND_WI_K0_SWE_v01_u2026-05-20T13-36-00.zip',           'WIND_WI_K0_SWE_v01_matchfile.json'),
+    ('WIND_WI_OR_PRE_v01_u2026-05-20T13-37-00.zip',           'WIND_WI_OR_PRE_v01_matchfile.json'),
     #('',''),
 ]
 
 #a little section to store pastable undo commands
 '''
-2026-05-20T13-35-00_ACE_AC_H0_SWE_v01 ACE_AC_H0_SWE_v01
-umatchtest_ACE_AC_H0_MFI_v00 ACE_AC_H0_MFI_v00
+2026-05-20T13-35-00 ACE_AC_H0_MFI_v01
+2026-05-20T13-35-00 ACE_AC_H0_SWE_v01
+2026-05-20T13-35-00 ACE_AC_OR_SSC_v01
+2026-05-20T13-36-00 DSCOVR_DSCOVR_ORBIT_PRE_v01
+2026-05-20T13-36-00 INTERBALL_IT_H0_DOK_v01
+2026-05-20T13-36-00 INTERBALL_IT_K0_ELE_v01
+2026-05-20T13-36-00 INTERBALL_IT_K0_VDP_v01
+2026-05-20T13-36-00 INTERBALL_IT_OR_DEF_v01
+2026-05-20T13-36-00 WIND_WI_K0_SWE_v01
+2026-05-20T13-37-00 WIND_WI_OR_PRE_v01
 '''
 
 # Path to manage.py
@@ -39,7 +50,7 @@ for z, m in to_upload:
     print(f"{'='*60}")
     
     # 1. evaluate
-    cmd = f"{python_cmd} \"{manage_py}\" evaluate {z} {m}"
+    cmd = f"{python_cmd} {manage_py} evaluate {z} {m}"
     print(f"Running: {cmd}")
     ret = os.system(cmd)
     if ret != 0:
@@ -47,7 +58,7 @@ for z, m in to_upload:
         continue
     
     # 2. makemigrations
-    cmd = f"{python_cmd} \"{manage_py}\" makemigrations data_cdf --skip-checks"
+    cmd = f"{python_cmd} {manage_py} makemigrations data_cdf --skip-checks"
     print(f"Running: {cmd}")
     ret = os.system(cmd)
     if ret != 0:
@@ -55,7 +66,7 @@ for z, m in to_upload:
         continue
     
     # 3. migrate
-    cmd = f"{python_cmd} \"{manage_py}\" migrate data_cdf --skip-checks"
+    cmd = f"{python_cmd} {manage_py} migrate data_cdf --skip-checks"
     print(f"Running: {cmd}")
     ret = os.system(cmd)
     if ret != 0:
@@ -63,7 +74,7 @@ for z, m in to_upload:
         continue
     
     # 4. save_data
-    cmd = f"{python_cmd} \"{manage_py}\" save_data {upload_tag} {dataset_tag}"
+    cmd = f"{python_cmd} {manage_py} save_data {upload_tag} {dataset_tag}"
     print(f"Running: {cmd}")
     ret = os.system(cmd)
     if ret != 0:
