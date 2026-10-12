@@ -1,86 +1,130 @@
-import os
+'''
+Bulk loader: runs the 4 load steps for every dataset zip found in UPLOAD_ZIP_DIR.
+
+Steps per dataset (each a separate manage.py process; evaluate creates a dynamic model mid-run,
+so in-process call_command would fight Django's app registry):
+    evaluate <zip> <matchfile> -> makemigrations data_cdf -> migrate data_cdf -> save_data <upload_tag> <dataset_tag>
+
+Zip names: <DATASET_TAG>_u<UPLOAD_TAG>.zip, matchfile: <DATASET_TAG>_matchfile.json in MATCH_FILE_DIR.
+Dirs come from solar_project/configs/settings.json (same file Django reads).
+
+Usage (venv active):
+    python intake.py --dry-run                  # show the plan, run nothing
+    python intake.py                            # load everything found
+    python intake.py --only WIND_WI_H0_MFI_v01  # just these datasets (repeatable)
+    python intake.py --skip ACE_AC_H0_MFI_v01   # all but these (repeatable)
+    python intake.py --stop-on-error            # stop at the first failed step
+    python intake.py --undo                     # print pastable undo commands, run nothing
+'''
+import argparse
+import json
+import re
+import subprocess
 import sys
 from pathlib import Path
 
-to_upload = [
-    #('ACE_AC_H0_MFI_v01_u2026-05-20T13-35-00.zip',            'ACE_AC_H0_MFI_v01_matchfile.json'),
-    #('ACE_AC_H0_SWE_v01_u2026-05-20T13-35-00.zip',            'ACE_AC_H0_SWE_v01_matchfile.json'),
-    ('ACE_AC_OR_SSC_v01_u2026-05-20T13-35-00.zip',            'ACE_AC_OR_SSC_v01_matchfile.json'),
-    ('DSCOVR_DSCOVR_ORBIT_PRE_v01_u2026-05-20T13-36-00.zip',  'DSCOVR_DSCOVR_ORBIT_PRE_v01_matchfile.json'),
-    ('INTERBALL_IT_H0_DOK_v01_u2026-05-20T13-36-00.zip',      'INTERBALL_IT_H0_DOK_v01_matchfile.json'),
-    ('INTERBALL_IT_K0_ELE_v01_u2026-05-20T13-36-00.zip',      'INTERBALL_IT_K0_ELE_v01_matchfile.json'),
-    ('INTERBALL_IT_K0_VDP_v01_u2026-05-20T13-36-00.zip',      'INTERBALL_IT_K0_VDP_v01_matchfile.json'),
-    ('INTERBALL_IT_OR_DEF_v01_u2026-05-20T13-36-00.zip',      'INTERBALL_IT_OR_DEF_v01_matchfile.json'),
-    ('WIND_WI_K0_SWE_v01_u2026-05-20T13-36-00.zip',           'WIND_WI_K0_SWE_v01_matchfile.json'),
-    ('WIND_WI_OR_PRE_v01_u2026-05-20T13-37-00.zip',           'WIND_WI_OR_PRE_v01_matchfile.json'),
-    #('',''),
+BASE_DIR = Path(__file__).resolve().parent
+SOLARTERRA = BASE_DIR.parent / "solar_project" / "solarterra"
+MANAGE_PY = SOLARTERRA / "manage.py"
+CONFIG_PATH = BASE_DIR.parent / "solar_project" / "configs" / "settings.json"
+
+#<DATASET_TAG>_u<UPLOAD_TAG>.zip; upload tag = timestamp, so match the LAST "_u" before it
+ZIP_NAME = re.compile(r"^(?P<dataset>.+)_u(?P<upload>\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})\.zip$")
+
+#(step name, args builder); one place to add/reorder steps
+#TODO: why --skip-checks? (old script had it, reason unknown)
+STEPS = [
+    ("evaluate",       lambda job: ["evaluate", job["zip"], job["matchfile"]]),
+    ("makemigrations", lambda job: ["makemigrations", "data_cdf", "--skip-checks"]),
+    ("migrate",        lambda job: ["migrate", "data_cdf", "--skip-checks"]),
+    ("save_data",      lambda job: ["save_data", job["upload"], job["dataset"]]),
 ]
 
-#a little section to store pastable undo commands
-'''
-2026-05-20T13-35-00 ACE_AC_H0_MFI_v01
-2026-05-20T13-35-00 ACE_AC_H0_SWE_v01
-2026-05-20T13-35-00 ACE_AC_OR_SSC_v01
-2026-05-20T13-36-00 DSCOVR_DSCOVR_ORBIT_PRE_v01
-2026-05-20T13-36-00 INTERBALL_IT_H0_DOK_v01
-2026-05-20T13-36-00 INTERBALL_IT_K0_ELE_v01
-2026-05-20T13-36-00 INTERBALL_IT_K0_VDP_v01
-2026-05-20T13-36-00 INTERBALL_IT_OR_DEF_v01
-2026-05-20T13-36-00 WIND_WI_K0_SWE_v01
-2026-05-20T13-37-00 WIND_WI_OR_PRE_v01
-'''
 
-# Path to manage.py
-BASE_DIR = Path(__file__).resolve().parent
-manage_py = BASE_DIR.parent / "solar_project" / "solarterra" / "manage.py"
-python_cmd = f'"{sys.executable}"'
+def load_dirs():
+    loader = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))["LOADER"]
+    return Path(loader["UPLOAD_ZIP_DIR"]), Path(loader["MATCH_FILE_DIR"])
 
-def get_dataset_tag(zip_filename):
-    return zip_filename.split('_u')[0]
 
-def get_upload_tag(zip_filename):
-    return zip_filename.split('_u')[-1].replace('.zip', '')
+def find_jobs(zip_dir, match_dir):
+    '''One job per zip, sorted by upload tag (older uploads first). Returns (jobs, problems).'''
+    jobs, problems = [], []
+    for zip_path in sorted(zip_dir.glob("*.zip")):
+        m = ZIP_NAME.match(zip_path.name)
+        if m is None:
+            problems.append(f"{zip_path.name}: name doesn't match <DATASET>_u<YYYY-MM-DDTHH-MM-SS>.zip")
+            continue
+        matchfile = f"{m['dataset']}_matchfile.json"
+        if not (match_dir / matchfile).exists():
+            problems.append(f"{zip_path.name}: no {matchfile} in {match_dir}")
+            continue
+        jobs.append({"dataset": m["dataset"], "upload": m["upload"], "zip": zip_path.name, "matchfile": matchfile})
+    jobs.sort(key=lambda job: job["upload"])
+    return jobs, problems
 
-for z, m in to_upload:
-    dataset_tag = get_dataset_tag(z)
-    upload_tag = get_upload_tag(z)
-    
-    print(f"\n{'='*60}")
-    print(f"Processing: {dataset_tag}")
-    print(f"{'='*60}")
-    
-    # 1. evaluate
-    cmd = f"{python_cmd} {manage_py} evaluate {z} {m}"
-    print(f"Running: {cmd}")
-    ret = os.system(cmd)
-    if ret != 0:
-        print(f"ERROR: evaluate failed for {dataset_tag}")
-        continue
-    
-    # 2. makemigrations
-    cmd = f"{python_cmd} {manage_py} makemigrations data_cdf --skip-checks"
-    print(f"Running: {cmd}")
-    ret = os.system(cmd)
-    if ret != 0:
-        print(f"ERROR: makemigrations failed for {dataset_tag}")
-        continue
-    
-    # 3. migrate
-    cmd = f"{python_cmd} {manage_py} migrate data_cdf --skip-checks"
-    print(f"Running: {cmd}")
-    ret = os.system(cmd)
-    if ret != 0:
-        print(f"ERROR: migrate failed for {dataset_tag}")
-        continue
-    
-    # 4. save_data
-    cmd = f"{python_cmd} {manage_py} save_data {upload_tag} {dataset_tag}"
-    print(f"Running: {cmd}")
-    ret = os.system(cmd)
-    if ret != 0:
-        print(f"ERROR: save_data failed for {dataset_tag}")
-        continue
-    
-    print(f"SUCCESS: {dataset_tag} uploaded")
 
-print("\nDone.") 
+def run_job(job):
+    '''Runs all steps for one dataset. Returns the failed step name, or None on success.'''
+    for name, build_args in STEPS:
+        cmd = [sys.executable, str(MANAGE_PY), *build_args(job)]
+        print(f"  -> {name}: {' '.join(cmd[2:])}", flush=True)
+        if subprocess.run(cmd, cwd=SOLARTERRA).returncode != 0:
+            return name
+    return None
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Bulk-load dataset zips via manage.py")
+    parser.add_argument("--only", action="append", default=[], metavar="DATASET_TAG")
+    parser.add_argument("--skip", action="append", default=[], metavar="DATASET_TAG")
+    parser.add_argument("--dry-run", action="store_true", help="show the plan, run nothing")
+    parser.add_argument("--undo", action="store_true", help="print undo commands, run nothing")
+    parser.add_argument("--stop-on-error", action="store_true")
+    args = parser.parse_args()
+
+    zip_dir, match_dir = load_dirs()
+    jobs, problems = find_jobs(zip_dir, match_dir)
+    for problem in problems:
+        print(f"WARNING: skipped {problem}")
+
+    known = {job["dataset"] for job in jobs}
+    for tag in args.only + args.skip:
+        if tag not in known:
+            print(f"WARNING: --only/--skip tag {tag} matches no zip")
+    if args.only:
+        jobs = [job for job in jobs if job["dataset"] in args.only]
+    jobs = [job for job in jobs if job["dataset"] not in args.skip]
+
+    if args.undo:
+        for job in jobs:
+            print(f"python {MANAGE_PY} undo {job['upload']} {job['dataset']}")
+        return
+
+    print(f"{len(jobs)} dataset(s) from {zip_dir}:")
+    for job in jobs:
+        print(f"  {job['dataset']}  (upload {job['upload']})")
+    if args.dry_run or not jobs:
+        return
+
+    results = []  #(dataset, failed step or None)
+    for i, job in enumerate(jobs, 1):
+        print(f"\n{'=' * 60}\n[{i}/{len(jobs)}] {job['dataset']}\n{'=' * 60}", flush=True)
+        failed = run_job(job)
+        results.append((job["dataset"], failed))
+        if failed and args.stop_on_error:
+            break
+
+    print(f"\n{'=' * 60}\nSUMMARY")
+    for dataset, failed in results:
+        print(f"  {'OK  ' if failed is None else 'FAIL'}  {dataset}" + (f"  (at {failed})" if failed else ""))
+    not_run = len(jobs) - len(results)
+    if not_run:
+        print(f"  {not_run} not run (--stop-on-error)")
+    if any(failed for _, failed in results):
+        #a dataset failed after evaluate is half-loaded -> undo before retrying
+        print("Failed after evaluate = half-loaded: run `python intake.py --undo --only <TAG>` for the undo command.")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
